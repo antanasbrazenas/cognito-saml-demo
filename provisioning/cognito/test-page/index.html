@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/materialize/0.100.2/css/materialize.min.css">
+	<link rel="stylesheet" href="https://code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+	<script type="text/javascript" src="https://code.jquery.com/jquery-3.2.1.min.js"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/materialize/0.100.2/js/materialize.min.js"></script>
+	<script src="https://code.jquery.com/ui/1.12.1/jquery-ui.js"></script>
+	<title>Cognito SAML Demo</title>
+	<script>
+		function runTest() {
+			jQuery('#user-data').html('');
+			var authApi = ((jQuery('#button-login').is(':visible')) ? 'login' : 'logout');
+			window.location.replace("https://" + jQuery('#domain').val() + ".auth." + jQuery('#region').val() + ".amazoncognito.com/" + authApi + "?response_type=token&client_id=" + jQuery('#client').val() + "&redirect_uri=" + encodeURIComponent(jQuery('#redirect-url').val()) + ((jQuery('#button-logout').is(':visible')) ? '&logout_uri=' + encodeURIComponent(jQuery('#redirect-url').val()) : ''))
+		};
+
+        function getParameterByName(name, paramString) {
+			let searchParams = new URLSearchParams(paramString);
+			if (searchParams.has(name) === true) {
+				return searchParams.get(name)
+			} else {
+				return ""
+			}
+		};
+
+		function parseJwt(token) {
+            var base64Url = token.split('.')[1];
+            var base64 = base64Url.replace('-', '+').replace('_', '/');
+            return JSON.parse(window.atob(base64));
+        };
+
+        function saveToLocalStore() {
+        	localStorage.setItem("domain", jQuery('#domain').val());
+        	localStorage.setItem("region", jQuery('#region').val());
+        	localStorage.setItem("client", jQuery('#client').val());
+        	localStorage.setItem("redirect-url", jQuery('#redirect-url').val());
+        }
+
+        jQuery(document).ready(function() {
+			if (typeof(Storage) !== "undefined") {
+				jQuery('#domain').val(localStorage.getItem("domain"));
+				jQuery('#region').val(localStorage.getItem("region"));
+				jQuery('#client').val(localStorage.getItem("client"));
+				jQuery('#redirect-url').val(localStorage.getItem("redirect-url"));
+			} else {
+				alert('Your browser does not support some of the functionality offered by this page!');
+			}
+
+        	if(window.location.hash) {
+        		var id_token = getParameterByName("id_token", window.location.hash.substring(1))
+        		if (id_token) {
+        			console.log("id_token="+id_token);
+					var decoded_token = parseJwt(id_token)
+					console.log(decoded_token);
+					jQuery('#user-data').html(JSON.stringify(decoded_token, undefined, 4));
+					jQuery('#user-data-container').show('slow');
+					jQuery('#button-logout').show('slow');
+					return;
+        		}
+        		var error = getParameterByName("error_description", window.location.hash.substring(1))
+        		if (error) {
+        			alert(error);
+        			window.location.replace(window.location.href.replace(window.location.hash, ""))
+					return;
+        		}
+        	} else {
+        		jQuery('#button-login').show('slow');
+        	}
+        });
+	</script>
+</head>
+<body>
+	<div class="navbar-fixed">
+		<nav>
+			<div class="nav-wrapper">
+				<a href="#" class="brand-logo">Cognito SAML Demo</a>
+			</div>
+		</nav>
+	</div>
+	<div class="row card-panel">
+		<form class="col s12" action="" onsubmit="runTest(); return false">
+			<div class="row">
+				<div class="input-field col s2">
+					<input placeholder="Cognito Domain" id="domain" type="text" class="validate" required>
+					<label for="domain">Cognito Domain</label>
+				</div>
+				<div class="input-field col s1">
+					<input placeholder="Region" id="region" type="text" class="validate" required>
+					<label for="region">Region</label>
+				</div>
+				<div class="input-field col s2">
+					<input placeholder="Client ID" id="client" type="text" class="validate" required>
+					<label for="client">Client ID</label>
+				</div>
+				<div class="input-field col s4">
+					<input placeholder="Redirect URL" id="redirect-url" type="text" class="validate" required>
+					<label for="redirect-url">Redirect URL</label>
+				</div>
+				<div class="input-field col s3">
+					<button class="btn waves-effect waves-light amber lighten-1" type="button" name="action" onclick="saveToLocalStore();return false">Remember</button>
+				</div>
+			</div>
+			<div class="row">
+				<div class="input-field col s3" hidden="hidden" id="button-login">
+					<button class="btn waves-effect waves-light green darken-3" type="submit" name="action">Login
+						<i class="material-icons right">send</i>
+					</button>
+				</div>
+				<div class="input-field col s3" hidden="hidden" id="button-logout">
+					<button class="btn waves-effect amber darken-4" type="submit" name="action">Logout
+						<i class="material-icons right">exit_to_app</i>
+					</button>
+				</div>
+			</div>
+		</form>
+	</div>
+	<div class="container" hidden="hidden" id="user-data-container">
+		<div class="row">
+			<div class="col s12">
+				<label for="user-data">Logged In User</label>
+				<pre id="user-data"></pre>
+			</div>
+		</div>
+	</div>
+</body>
+</html>

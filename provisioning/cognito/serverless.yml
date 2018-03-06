@@ -1,0 +1,238 @@
+service: saml-demo-cognito
+
+frameworkVersion: ">=1.26.1"
+
+plugins:
+  - serverless-plugin-scripts
+
+custom:
+  publicPageKey: ${self:provider.deploymentBucket}/saml-demo-cognito/${self:provider.stage}/test/index.html
+  scripts:
+    hooks:
+      'deploy:createDeploymentArtifacts': aws s3 cp test-page/index.html s3://${self:custom.publicPageKey} --acl public-read
+  common: ${file(../../serverless_properties.yml):${opt:stage, file(../../serverless_properties.yml):default_vars.defaultProfile}}
+
+provider:
+  name: aws
+  defaultRegion: eu-west-1
+  region: ${opt:region, self:provider.defaultRegion}
+  stage: ${opt:stage, file(../../serverless_helpers.js):userNameSuffix}
+  deploymentBucket: ${self:custom.common.deploymentBucket}
+
+resources:
+  Description: ${self:provider.stage} - SAML Demo (Cognito)
+
+  Resources:
+# BEGIN - user pools
+    userPoolSAML:
+      Type: AWS::Cognito::UserPool
+      Properties:
+        UserPoolName: ${self:service}-${self:provider.stage}-SAML
+        AutoVerifiedAttributes:
+          - email
+        EmailVerificationSubject: Verify your account
+        EmailVerificationMessage: Your verification code is <b>{####}</b>.
+        Policies:
+          PasswordPolicy:
+            MinimumLength: 10
+            RequireLowercase: false
+            RequireNumbers: false
+            RequireSymbols: false
+            RequireUppercase: false
+        DeviceConfiguration:
+          DeviceOnlyRememberedOnUserPrompt: true
+        Schema:
+          -
+            Name: email
+            Mutable: true
+            Required: true
+          -
+            Name: address
+            Mutable: true
+            Required: false
+          -
+            Name: birthdate
+            Mutable: true
+            Required: false
+          -
+            AttributeDataType: String
+            Name: custom_user_ID
+            Mutable: true
+          -
+            Name: family_name
+            Mutable: true
+            Required: false
+          -
+            Name: given_name
+            Mutable: true
+            Required: false
+          -
+            Name: locale
+            Mutable: true
+            Required: false
+          -
+            Name: name
+            Mutable: true
+            Required: false
+          -
+            Name: phone_number
+            Mutable: true
+            Required: false
+          -
+            Name: picture
+            Mutable: true
+            Required: false
+          -
+            Name: preferred_username
+            Mutable: true
+            Required: false
+# END - user pools
+
+# BEGIN - clients
+    userPoolClientSAMLDev:
+      Type: AWS::Cognito::UserPoolClient
+      Properties:
+        ClientName: ${self:custom.common.appClientNames.default}
+        GenerateSecret: false
+        UserPoolId:
+          Ref: userPoolSAML
+# END - clients
+
+## BEGIN - user pool domains
+    userPoolDomainSAML:
+      Type: Custom::UserPoolDomain
+      Properties:
+        UserPoolId:
+          Ref: userPoolSAML
+        Domain: saml-demo-pt4-${self:provider.stage}
+        StackName:
+          Ref: AWS::StackName
+        ServiceToken:
+          Fn::ImportValue: ${self:custom.common.customResourceServiceToken}
+# END - user pool domains
+
+# BEGIN - SAML settings
+    identityProviderSAML:
+      Type: Custom::SAMLProvider
+      Properties:
+        StackName:
+          Ref: AWS::StackName
+        UserPoolId:
+          Ref: userPoolSAML
+        ProviderName: ActiveDirectory
+        MetadataURL:
+          Fn::ImportValue: saml-demo-ad:${self:provider.stage}:MetadataXML
+        Attributes:
+          preferred_username: http://schemas.xmlsoap.org/ws/2005/05/identity/claims/upn
+          given_name: http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname
+          family_name: http://schemas.xmlsoap.org/ws/2005/05/identity/claims/surname
+          custom:custom_user_ID: http://schemas.xmlsoap.org/ws/2005/05/identity/claims/customattr1
+          email: http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress
+        ServiceToken:
+          Fn::ImportValue: ${self:custom.common.customResourceServiceToken}
+
+    userPoolClientProvidersSAML:
+      Type: Custom::AppClientProviders
+      Properties:
+        StackName:
+          Ref: AWS::StackName
+        UserPoolId:
+          Ref: userPoolSAML
+        ClientId:
+          Ref: userPoolClientSAMLDev
+        SupportedIdentityProviders:
+          - ActiveDirectory
+        CallbackURLs:
+          - "https://s3-${self:provider.region}.amazonaws.com/${self:custom.publicPageKey}"
+        LogoutURLs:
+          - "https://s3-${self:provider.region}.amazonaws.com/${self:custom.publicPageKey}"
+        OAuthFlows:
+          - code
+          - implicit
+        OAuthScopes:
+          - phone
+          - email
+          - openid
+          - profile
+          - aws.cognito.signin.user.admin
+        ServiceToken:
+          Fn::ImportValue: ${self:custom.common.customResourceServiceToken}
+      DependsOn:
+        - identityProviderSAML
+# END - SAML settings
+
+# BEGIN - identity pool
+    identityPoolRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            -
+              Effect: Allow
+              Principal:
+                Federated:
+                  - cognito-identity.amazonaws.com
+              Action:
+                - sts:AssumeRoleWithWebIdentity
+              Condition:
+                StringEquals:
+                  cognito-identity.amazonaws.com:aud:
+                    - Ref: identityPool
+                ForAnyValue:StringLike:
+                  cognito-identity.amazonaws.com:amr:
+                    - authenticated
+        Path: "/"
+        Policies:
+          -
+            PolicyName: FederatedIdentityPolicy
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                -
+                  Effect: Allow
+                  Action: execute-api:Invoke
+                  Resource:
+                    - "*"
+
+    identityPool:
+      Type: AWS::Cognito::IdentityPool
+      Properties:
+        IdentityPoolName: saml_demo_${self:provider.stage}
+        AllowUnauthenticatedIdentities: false
+        CognitoIdentityProviders:
+          -
+            ClientId:
+              Ref: userPoolClientSAMLDev
+            ProviderName:
+              Fn::GetAtt: [userPoolSAML, ProviderName]
+            ServerSideTokenCheck: true
+
+    identityPoolRoleAttach:
+      Type: AWS::Cognito::IdentityPoolRoleAttachment
+      Properties:
+        IdentityPoolId:
+          Ref: identityPool
+        Roles:
+          authenticated:
+            Fn::GetAtt: [identityPoolRole, Arn]
+# END - identity pool
+
+  Outputs:
+    identityPoolID:
+      Description: ID for the Federated Identity Pool
+      Value:
+        Ref: identityPool
+
+    userPoolIdSAML:
+      Description: ID for the AD User Pool
+      Value:
+        Ref: userPoolSAML
+
+    clientIdSAMLDev:
+      Description: ID for the dev client in the AD User Pool
+      Value:
+        Ref: userPoolClientSAMLDev
+
+    testPage:
+      Value: "https://s3-${self:provider.region}.amazonaws.com/${self:custom.publicPageKey}"

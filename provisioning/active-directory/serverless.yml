@@ -1,0 +1,173 @@
+service: saml-demo-ad
+
+frameworkVersion: ">=1.26.1"
+
+custom: ${file(../../serverless_properties.yml):${opt:stage, file(../../serverless_properties.yml):default_vars.defaultProfile}}
+
+provider:
+  name: aws
+  region: eu-west-1
+  stage: ${opt:stage, file(../../serverless_helpers.js):userNameSuffix}
+  deploymentBucket: ${self:custom.deploymentBucket}
+
+resources:
+  Description: ${self:provider.stage} - SAML Demo (Active Directory)
+
+  Resources:
+    DomainController:
+      Type: AWS::EC2::Instance
+      Metadata:
+        AWS::CloudFormation::Init:
+          config:
+            files:
+              c:\\cfn\\cfn-hup.conf:
+                content:
+                  Fn::Join:
+                    - ""
+                    - - "[main]\n"
+                      - "stack="
+                      - Ref: AWS::StackId
+                      - "\n"
+                      - "region="
+                      - Ref: AWS::Region
+                      - "\n"
+              c:\\cfn\\hooks.d\\cfn-auto-reloader.conf:
+                content:
+                  Fn::Join:
+                    - ""
+                    - - "[cfn-auto-reloader-hook]\n"
+                      - "triggers=post.update\n"
+                      - "path=Resources.DomainController.Metadata.AWS::CloudFormation::Init\n"
+                      - "action=cfn-init.exe -v -s "
+                      - Ref: AWS::StackId
+                      - " -r DomainController"
+                      - " --region "
+                      - Ref: AWS::Region
+                      - "\n"
+              C:\\cfn\\RunCommand.bat:
+                content: "%~1\nIF %ERRORLEVEL% GTR 10 ( exit /b 1 ) else ( exit /b 0 )"
+            commands:
+              1-run-dcpromo:
+                command: "C:\\cfn\\RunCommand.bat \"dcpromo /unattend  /ReplicaOrNewDomain:Domain  /NewDomain:Forest  /NewDomainDNSName:${opt:domainDNSName}  /ForestLevel:4 /DomainNetbiosName:${opt:domainNetBIOSName} /DomainLevel:4  /InstallDNS:Yes  /ConfirmGc:Yes  /CreateDNSDelegation:No  /DatabasePath:\"C:\\Windows\\NTDS\"  /LogPath:\"C:\\Windows\\NTDS\"  /SYSVOLPath:\"C:\\Windows\\SYSVOL\" /SafeModeAdminPassword=${opt:safemodePassword} /RebootOnCompletion:Yes\""
+                waitAfterCompletion: forever
+              2-signal-success:
+                command:
+                  Fn::Join:
+                    - ""
+                    - - "cfn-signal.exe -e 0 \""
+                      - Fn::Base64:
+                          Ref: DomainControllerWaitHandle
+                      - "\""
+            services:
+              windows:
+                cfn-hup:
+                  enabled: true
+                  ensureRunning: true
+                  files:
+                    - c:\\cfn\\cfn-hup.conf
+                    - c:\\cfn\\hooks.d\\cfn-auto-reloader.conf
+      Properties:
+        ImageId: ami-df6810a6
+        InstanceType: t2.small
+        SecurityGroups:
+          - Ref: DomainControllerSecurityGroup
+        KeyName: ${opt:sshKey}
+        UserData:
+          Fn::Base64:
+            Fn::Join:
+              - ""
+              - - "<script>\n"
+                - "cfn-init.exe -v -s "
+                - Ref: AWS::StackId
+                - " -r DomainController "
+                - " --region "
+                - Ref: AWS::Region
+                - "\n"
+                - "</script>"
+        Tags:
+          - Key: Name
+            Value: ${self:provider.stage}-${self:service}
+
+    DomainControllerWaitCondition:
+      Type: AWS::CloudFormation::WaitCondition
+      Properties:
+        Handle:
+          Ref: DomainControllerWaitHandle
+        Timeout: 1500
+      DependsOn:
+        - DomainController
+
+    DomainControllerWaitHandle:
+      Type: AWS::CloudFormation::WaitConditionHandle
+
+    DomainControllerSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: AD security group
+        SecurityGroupIngress:
+          - IpProtocol: -1
+            FromPort: -1
+            ToPort: -1
+            SourceSecurityGroupName:
+              Ref: DomainMemberSecurityGroup
+          - IpProtocol: -1
+            FromPort: -1
+            ToPort: -1
+            CidrIp: ${opt:rdpCIDR}
+#          - IpProtocol: udp
+#            FromPort: 53
+#            ToPort: 445
+#            SourceSecurityGroupName:
+#              Ref: DomainMemberSecurityGroup
+#          - IpProtocol: tcp
+#            FromPort: 53
+#            ToPort: 65535
+#            SourceSecurityGroupName:
+#              Ref: DomainMemberSecurityGroup
+#          - IpProtocol: tcp
+#            FromPort: 3389
+#            ToPort: 3389
+#            CidrIp: ${opt:rdpCIDR}
+#          - IpProtocol: icmp
+#            FromPort: -1
+#            ToPort: -1
+#            SourceSecurityGroupName:
+#              Ref: DomainMemberSecurityGroup
+
+    DomainMemberSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: AD members
+
+    DomainMemberSecurityGroupIngress1:
+      Type: AWS::EC2::SecurityGroupIngress
+      Properties:
+        GroupName:
+          Ref: DomainMemberSecurityGroup
+        IpProtocol: tcp
+        FromPort: 3389
+        ToPort: 3389
+        CidrIp: ${opt:rdpCIDR}
+
+  Outputs:
+    DomainControllerDNSName:
+      Value:
+        Fn::GetAtt: [DomainController, PublicDnsName]
+
+    SignOnPage:
+      Value: "https://${opt:domainDNSName}/adfs/ls/IdpInitiatedSignOn.aspx"
+
+    MetadataXML:
+      Value: "https://${opt:domainDNSName}/FederationMetadata/2007-06/FederationMetadata.xml"
+      Export:
+        Name: ${self:service}:${self:provider.stage}:MetadataXML
+
+    DomainControllerIP:
+      Value:
+        Fn::GetAtt: [DomainController, PrivateIp]
+
+    DomainAdmin:
+      Value: ${opt:domainNetBIOSName}\\Administrator
+
+    DomainAdminPassword:
+      Value: Please retrieve Administrator password of the instance

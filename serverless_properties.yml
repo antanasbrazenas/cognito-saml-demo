@@ -1,0 +1,12 @@
+default_vars: &default_vars
+  defaultProfile: internal
+
+  deploymentBucket: shared-serverless-deploys-${self:provider.region}
+
+  appClientNames:
+    default: dev
+
+  customResourceServiceToken: pt4-custom-resources:build:ServiceToken
+
+internal: *default_vars
+dev: *default_vars
